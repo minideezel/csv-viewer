@@ -118,8 +118,9 @@
         // Setup date-fns aliases from global object
         const { parseISO, parse, differenceInDays, isAfter, isEqual, format, startOfDay } = dateFns;
 
-        // Configuration
-        const DATE_MATCH_WINDOW_DAYS = 3;
+    // Configuration
+    // Increased window to 5 days to allow a wider matching range between bank and budget entries
+    const DATE_MATCH_WINDOW_DAYS = 5;
 
         // DOM elements
         const btn = document.getElementById('reconcileBtn');

@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bank Reconciliation Diff Tool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0/cdn.min.js"></script>
+    <style>
+        /* Custom scrollbar for the diff table if it gets very long */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #aaa; }
+        .inter-font { font-family: 'Inter', sans-serif; }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-50 text-gray-800 inter-font p-6">
+
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <nav class="mb-4">
+            <a href="index.html" class="inline-block px-3 py-1 bg-gray-100 text-gray-800 rounded hover:bg-gray-200 text-sm">CSV Viewer</a>
+        </nav>
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-900">CSV Reconciliation Diff</h1>
+            <p class="text-gray-600 mt-2">Compare your bank statement against your budget to find missing transactions.</p>
+        </header>
+
+        <!-- Controls Area -->
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 mb-8 grid grid-cols-1 md:grid-cols-4 gap-6">
+            <!-- Bank CSV Input -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">1. Bank CSV (Source of Truth)</label>
+                <input type="file" id="bankCsv" accept=".csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
+                <div class="mt-2">
+                    <label class="inline-flex items-center">
+                        <input type="checkbox" id="invertBank" class="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50">
+                        <span class="ml-2 text-sm text-gray-600">Invert Bank Amounts (+/-)</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Budget CSV Input -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">2. Budget CSV</label>
+                <input type="file" id="budgetCsv" accept=".csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100"/>
+            </div>
+
+             <!-- Start Date -->
+             <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">3. Start Comparing From</label>
+                <input type="date" id="startDate" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
+            </div>
+
+            <!-- Action -->
+            <div class="flex items-end">
+                <button id="reconcileBtn" class="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-md transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed">
+                    Run Comparison
+                </button>
+            </div>
+        </div>
+
+        <!-- Error Messages -->
+        <div id="errorContainer" class="hidden p-4 mb-6 bg-red-50 border-l-4 border-red-500 text-red-700"></div>
+
+        <!-- Results Area -->
+        <div id="resultsArea" class="hidden">
+            <!-- Summary Stats -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div class="bg-white p-4 rounded-lg border shadow-sm">
+                    <div class="text-sm text-gray-500">Total Matches</div>
+                    <div id="statMatched" class="text-2xl font-bold text-green-600">-</div>
+                </div>
+                <div class="bg-white p-4 rounded-lg border shadow-sm">
+                    <div class="text-sm text-gray-500">Unmatched Bank (Missing in Budget)</div>
+                    <div id="statUnmatchedBank" class="text-2xl font-bold text-red-600">-</div>
+                </div>
+                 <div class="bg-white p-4 rounded-lg border shadow-sm opacity-75">
+                    <div class="text-sm text-gray-500">Unmatched Budget (Extra)</div>
+                    <div id="statUnmatchedBudget" class="text-2xl font-bold text-gray-600">-</div>
+                </div>
+                 <div class="bg-white p-4 rounded-lg border shadow-sm">
+                    <div class="text-sm text-gray-500">Date Window Used</div>
+                    <div class="text-2xl font-bold text-blue-600">±3 Days</div>
+                </div>
+            </div>
+
+            <!-- Diff Table -->
+            <div class="bg-white shadow-sm rounded-xl border border-gray-200 overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-24">Date</th>
+                                <th scope="col" class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-10">Status</th>
+                                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-l border-r border-gray-200 bg-blue-50/50 w-5/12">
+                                    Bank Transaction
+                                </th>
+                                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-purple-50/50 w-5/12">
+                                    Matched Budget Entry
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody id="diffTableBody" class="bg-white divide-y divide-gray-200 text-sm">
+                            <!-- Rows will be inserted here by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Setup date-fns aliases from global object
+        const { parseISO, parse, differenceInDays, isAfter, isEqual, format, startOfDay } = dateFns;
+
+        // Configuration
+        const DATE_MATCH_WINDOW_DAYS = 3;
+
+        // DOM elements
+        const btn = document.getElementById('reconcileBtn');
+        const errorContainer = document.getElementById('errorContainer');
+        const resultsArea = document.getElementById('resultsArea');
+
+        // Set default start date to first day of current month
+        document.getElementById('startDate').valueAsDate = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+        // --- Helper Functions (Ported from Node.js) ---
+
+        const findCol = (row, possibleNames) => {
+            // row is an object where keys are headers.
+            const headers = Object.keys(row);
+            // Look for exact matches first to avoid partial string issues if possible, then loose matches
+            let match = headers.find(h => possibleNames.some(name => h.trim().toLowerCase() === name));
+            if (!match) {
+                 match = headers.find(h => possibleNames.some(name => h.toLowerCase().includes(name)));
+            }
+            return match;
+        };
+
+        const normalizeAmount = (val) => {
+            if (!val) return 0;
+            let clean = val.toString().replace(/[$,\s]/g, '');
+            if (clean.startsWith('(') && clean.endsWith(')')) {
+                clean = '-' + clean.replace(/[()]/g, '');
+            }
+            return parseFloat(clean) || 0;
+        };
+
+        const normalizeDate = (dateStr) => {
+            if (!dateStr) return null;
+            let date = parseISO(dateStr);
+            if (isNaN(date.getTime())) date = parse(dateStr, 'MM/dd/yyyy', new Date());
+            if (isNaN(date.getTime())) date = parse(dateStr, 'dd/MM/yyyy', new Date());
+            if (isNaN(date.getTime())) date = parse(dateStr, 'yyyy-MM-dd', new Date());
+            // Fallback to JS native parser if date-fns fails specific formats
+            if (isNaN(date.getTime())) date = new Date(dateStr);
+
+            return isNaN(date.getTime()) ? null : startOfDay(date);
+        };
+
+        const parseCSV = (file, type, invertBank) => {
+            return new Promise((resolve, reject) => {
+                Papa.parse(file, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: (results) => {
+                        const normalizedData = [];
+                        if (results.data.length === 0) {
+                            resolve([]);
+                            return;
+                        }
+
+                        // Detect columns based on first row
+                        const firstRow = results.data[0];
+                        const dateCol = findCol(firstRow, ['date', 'posting date', 'txn date']);
+                        const amtCol = findCol(firstRow, ['amount', 'amt', 'value']);
+                        const descCol = findCol(firstRow, ['description', 'payee', 'notes', 'memo', 'merchant']);
+                        
+                        // Optional split amount column for Budget CSVs
+                        const splitAmtCol = findCol(firstRow, ['split_amount', 'split amount']);
+
+                        if (!dateCol || !amtCol) {
+                            reject(new Error(`Could not auto-detect Date or Amount columns in ${type} CSV.`));
+                            return;
+                        }
+
+                        results.data.forEach(row => {
+                            // Ensure row has data in detected columns
+                            if (!row[dateCol] && !row[amtCol]) return;
+
+                            const description = descCol ? (row[descCol] || '').trim() : 'N/A';
+
+                            // Handle Budget-specific split logic
+                            if (type === 'budget') {
+                                // IGNORE rule: containing (SPLIT X OF Y)
+                                if (/\(SPLIT \d+ OF \d+\)/i.test(description)) {
+                                    return; // Skip this row entirely
+                                }
+                            }
+
+                            let amount = normalizeAmount(row[amtCol]);
+                            
+                            // OVERRIDE rule: Use split_amount if present in budget CSV
+                            if (type === 'budget' && splitAmtCol && row[splitAmtCol]) {
+                                const splitVal = normalizeAmount(row[splitAmtCol]);
+                                // If split_amount is defined and non-zero, use it instead of main amount
+                                if (splitVal !== 0) {
+                                    amount = splitVal;
+                                }
+                            }
+
+                            if (type === 'bank' && invertBank) {
+                                amount = amount * -1;
+                            }
+
+                            normalizedData.push({
+                                raw: row,
+                                type: type,
+                                normalized: {
+                                    date: normalizeDate(row[dateCol]),
+                                    amount: amount,
+                                    description: description
+                                },
+                                matched: false
+                            });
+                        });
+                        resolve(normalizedData);
+                    },
+                    error: (err) => reject(err)
+                });
+            });
+        };
+
+        // --- Main Logic ---
+
+        btn.addEventListener('click', async () => {
+            // Reset UI
+            errorContainer.classList.add('hidden');
+            errorContainer.textContent = '';
+            resultsArea.classList.add('hidden');
+            btn.textContent = 'Processing...';
+            btn.disabled = true;
+
+            try {
+                const bankFile = document.getElementById('bankCsv').files[0];
+                const budgetFile = document.getElementById('budgetCsv').files[0];
+                const startDateInput = document.getElementById('startDate').value;
+                const invertBank = document.getElementById('invertBank').checked;
+
+                if (!bankFile || !budgetFile || !startDateInput) {
+                    throw new Error("Please select both CSV files and a start date.");
+                }
+
+                const START_DATE = startOfDay(parseISO(startDateInput));
+
+                // Parse Files
+                const [bankTxns, budgetTxns] = await Promise.all([
+                    parseCSV(bankFile, 'bank', invertBank),
+                    parseCSV(budgetFile, 'budget', false)
+                ]);
+
+                // Filter by Date
+                // For budget, allow a buffer BEFORE start date to catch lagging bank postings at the very start of the window
+                const budgetStartBuffer = new Date(START_DATE.getTime() - (DATE_MATCH_WINDOW_DAYS * 24 * 60 * 60 * 1000));
+
+                const bankFiltered = bankTxns.filter(t => t.normalized.date && (isAfter(t.normalized.date, START_DATE) || isEqual(t.normalized.date, START_DATE)));
+                const budgetFiltered = budgetTxns.filter(t => t.normalized.date && isAfter(t.normalized.date, budgetStartBuffer));
+
+                // Matching Logic (same as Node script)
+                let matchCount = 0;
+                const unmatchedBank = [];
+
+                for (const bTxn of bankFiltered) {
+                    // Find candidates: exact amount, date within window, not yet matched
+                    const candidates = budgetFiltered.filter(budgetTxn =>
+                        !budgetTxn.matched &&
+                        Math.abs(budgetTxn.normalized.amount - bTxn.normalized.amount) < 0.01 && // Float safety
+                        Math.abs(differenceInDays(bTxn.normalized.date, budgetTxn.normalized.date)) <= DATE_MATCH_WINDOW_DAYS
+                    );
+
+                    if (candidates.length > 0) {
+                        // Tie-breaker: closest date
+                        candidates.sort((a, b) => {
+                             return Math.abs(differenceInDays(bTxn.normalized.date, a.normalized.date)) -
+                                    Math.abs(differenceInDays(bTxn.normalized.date, b.normalized.date));
+                        });
+
+                        const bestMatch = candidates[0];
+                        bestMatch.matched = true;
+                        bTxn.matched = true;
+                        bTxn.matchedWith = bestMatch; // Link them for display
+                        matchCount++;
+                    } else {
+                        unmatchedBank.push(bTxn);
+                    }
+                }
+
+                // Collect unmatched budget for display
+                const unmatchedBudget = budgetFiltered.filter(t => !t.matched && (isAfter(t.normalized.date, START_DATE) || isEqual(t.normalized.date, START_DATE)));
+
+                renderResults(bankFiltered, unmatchedBudget, matchCount, unmatchedBank.length, unmatchedBudget.length);
+
+            } catch (err) {
+                console.error(err);
+                errorContainer.textContent = err.message;
+                errorContainer.classList.remove('hidden');
+            } finally {
+                btn.textContent = 'Run Comparison';
+                btn.disabled = false;
+            }
+        });
+
+        function renderResults(bankFiltered, unmatchedBudget, mCount, ubCount, uBudCount) {
+             // Update Stats
+            document.getElementById('statMatched').textContent = mCount;
+            document.getElementById('statUnmatchedBank').textContent = ubCount;
+            document.getElementById('statUnmatchedBudget').textContent = uBudCount;
+
+            // Prepare unified list for Diff Table
+            let displayRows = [];
+
+            // Add all bank txns (both matched and unmatched)
+            bankFiltered.forEach(bt => {
+                displayRows.push({
+                    date: bt.normalized.date,
+                    type: bt.matched ? 'MATCH' : 'BANK_ONLY',
+                    bank: bt,
+                    budget: bt.matchedWith || null
+                });
+            });
+
+            // Add remaining unmatched budget txns
+            unmatchedBudget.forEach(budt => {
+                displayRows.push({
+                    date: budt.normalized.date,
+                    type: 'BUDGET_ONLY',
+                    bank: null,
+                    budget: budt
+                });
+            });
+
+            // Sort by date descending for standard bank view
+            displayRows.sort((a, b) => b.date - a.date);
+
+            const tbody = document.getElementById('diffTableBody');
+            tbody.innerHTML = '';
+
+            displayRows.forEach(row => {
+                const tr = document.createElement('tr');
+                let statusHtml = '';
+                let rowClass = '';
+
+                if (row.type === 'MATCH') {
+                    rowClass = 'bg-green-50 hover:bg-green-100 transition-colors';
+                     statusHtml = '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">MATCH</span>';
+                } else if (row.type === 'BANK_ONLY') {
+                    rowClass = 'bg-red-50 hover:bg-red-100 transition-colors';
+                    statusHtml = '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">MISSING</span>';
+                } else {
+                    rowClass = 'bg-gray-50 text-gray-500';
+                    statusHtml = '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">EXTRA</span>';
+                }
+
+                tr.className = rowClass;
+
+                // Format data for cells
+                const dateStr = format(row.date, 'MMM dd, yyyy');
+                const bankAmt = row.bank ? row.bank.normalized.amount.toFixed(2) : '';
+                const bankDesc = row.bank ? row.bank.normalized.description : '';
+
+                const budgetAmt = row.budget ? row.budget.normalized.amount.toFixed(2) : '';
+                // If matched, show date difference if any
+                let budgetDesc = row.budget ? row.budget.normalized.description : '';
+                if (row.type === 'MATCH' && !isEqual(row.bank.normalized.date, row.budget.normalized.date)) {
+                    const diff = differenceInDays(row.bank.normalized.date, row.budget.normalized.date);
+                    const diffStr = diff > 0 ? `+${diff}d` : `${diff}d`;
+                    budgetDesc = `<span class="text-xs text-blue-600 font-medium mr-2">[${diffStr}]</span>` + budgetDesc;
+                }
+
+                tr.innerHTML = `
+                    <td class="px-4 py-3 whitespace-nowrap text-sm font-medium">${dateStr}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-center">${statusHtml}</td>
+                    <td class="px-4 py-3 text-sm border-l border-r border-gray-200 ${row.bank ? '' : 'bg-gray-100'}">
+                        ${row.bank ? `
+                            <div class="flex justify-between">
+                                <span class="truncate pr-4" title="${bankDesc}">${bankDesc}</span>
+                                <span class="font-mono ${row.bank.normalized.amount < 0 ? 'text-red-700': 'text-gray-800'}">${bankAmt}</span>
+                            </div>
+                        ` : ''}
+                    </td>
+                    <td class="px-4 py-3 text-sm ${row.budget ? '' : 'bg-gray-100'}">
+                         ${row.budget ? `
+                            <div class="flex justify-between">
+                                <span class="truncate pr-4" title="${row.budget.normalized.description}">${budgetDesc}</span>
+                                <span class="font-mono ${row.budget.normalized.amount < 0 ? 'text-red-700': 'text-gray-800'}">${budgetAmt}</span>
+                            </div>
+                        ` : ''}
+                    </td>
+                `;
+
+                tbody.appendChild(tr);
+            });
+
+            resultsArea.classList.remove('hidden');
+            resultsArea.scrollIntoView({ behavior: 'smooth' });
+        }
+
+    </script>
+</body>
+</html>
+
